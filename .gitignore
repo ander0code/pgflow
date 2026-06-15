@@ -1,0 +1,16 @@
+# Configuración real con credenciales (nunca subir)
+.pgflow.conf
+*.conf
+!pgflow.conf.example
+
+# Backups y logs
+pgflow-backups/
+*.dump
+*.sql
+*.backup
+logs/
+*.log
+*.err
+
+# Sistema
+.DS_Store
