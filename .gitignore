@@ -12,5 +12,9 @@ logs/
 *.log
 *.err
 
+# Binario compilado y artefactos de build
+/pgflow
+/dist/
+
 # Sistema
 .DS_Store
