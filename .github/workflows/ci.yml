@@ -17,6 +17,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: force LF line endings (Windows-safe)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          # The Windows runner sometimes checks Go files out with CRLF even
+          # with autocrlf=false, which makes gofmt fail. .gitattributes
+          # enforces eol=lf, but we also re-checkout to be sure.
+          git config --global core.autocrlf input
+          git checkout HEAD -- .
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"

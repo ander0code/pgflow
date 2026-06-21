@@ -1,0 +1,19 @@
+# Force LF line endings for source files regardless of platform.
+# Without this, Windows runners may check out Go files with CRLF, which
+# makes `gofmt -l` fail even though the source is canonical.
+
+*.go     text eol=lf
+*.mod    text eol=lf
+*.sum    text eol=lf
+*.md     text eol=lf
+*.sh     text eol=lf
+*.ps1    text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.txt    text eol=lf
+*.json   text eol=lf
+Makefile text eol=lf
+
+# Generated binaries must never be touched by line-ending conversion.
+*.exe binary
+*.dump  binary
