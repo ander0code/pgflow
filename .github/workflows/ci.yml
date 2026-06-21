@@ -58,13 +58,15 @@ jobs:
       matrix:
         goos: [darwin, linux, windows]
         goarch: [amd64, arm64]
-        exclude:
-          # darwin/arm64 cross-builds from Linux occasionally fail on cgo deps;
-          # the macos arm64 leg in `test` covers it for real.
-          - goos: darwin
-            goarch: arm64
     steps:
       - uses: actions/checkout@v4
+
+      - name: force LF line endings (Windows-safe)
+        shell: bash
+        run: |
+          git config --global core.autocrlf input
+          git checkout HEAD -- .
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
