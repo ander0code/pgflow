@@ -9,7 +9,9 @@ PLATFORMS   := \
 	darwin/amd64 \
 	darwin/arm64 \
 	linux/amd64 \
-	linux/arm64
+	linux/arm64 \
+	windows/amd64 \
+	windows/arm64
 
 .PHONY: all build run test vet tidy install uninstall clean release build-all help
 
@@ -26,7 +28,7 @@ help:
 	@echo "  install      install to \$$INSTALL_DIR"
 	@echo "  uninstall    remove from \$$INSTALL_DIR"
 	@echo "  clean        remove build artifacts"
-	@echo "  build-all    cross-compile for darwin/linux × amd64/arm64 → dist/"
+	@echo "  build-all    cross-compile for darwin/linux/windows × amd64/arm64 → dist/"
 	@echo "  release      alias for build-all"
 
 ## build: build the binary for the current platform
@@ -71,7 +73,9 @@ build-all: clean
 	@for p in $(PLATFORMS); do \
 		os=$$(echo $$p | cut -d/ -f1); \
 		arch=$$(echo $$p | cut -d/ -f2); \
-		out=$(DIST_DIR)/$(BINARY)-$$os-$$arch; \
+		ext=""; \
+		if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
+		out=$(DIST_DIR)/$(BINARY)-$$os-$$arch$$ext; \
 		echo "  → $$out"; \
 		GOOS=$$os GOARCH=$$arch go build $(LDFLAGS) -o $$out . ; \
 	done
