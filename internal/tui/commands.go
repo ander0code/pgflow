@@ -10,6 +10,7 @@ import (
 
 	"github.com/ander0code/pgflow/internal/backups"
 	"github.com/ander0code/pgflow/internal/config"
+	"github.com/ander0code/pgflow/internal/naming"
 	"github.com/ander0code/pgflow/internal/pg"
 	"github.com/ander0code/pgflow/internal/tunnel"
 )
@@ -71,7 +72,11 @@ func streamDumpCmd(cfg *config.Config, db, folder, filename string) tea.Cmd {
 			defer close(ch)
 			out := filepath.Join(folder, filename)
 			ts := time.Now().Format("20060102_150405")
-			errlog := filepath.Join(cfg.LogDir(), fmt.Sprintf("pgdump_%s_%s.err", db, ts))
+			// `db` and `target` come from the prod server (resp. user input);
+			// sanitize them before they land in a path component so a hostile
+			// server name or a local ".." cannot redirect the .err log
+			// outside of LogDir.
+			errlog := filepath.Join(cfg.LogDir(), "pgdump_"+naming.Sanitize(db)+"_"+ts+".err")
 			ch <- logEvent{line: "▶ pg_dump " + db + " → " + filename}
 			res, err := pg.DumpStream(cfg.Prod, db, out, errlog, func(l string) { ch <- logEvent{line: l} })
 			ch <- logEvent{done: true, kind: "dump", dumpRes: res, err: err}
@@ -106,7 +111,7 @@ func streamRestoreCmd(cfg *config.Config, dump, mode, target string) tea.Cmd {
 				}
 			}
 			ts := time.Now().Format("20060102_150405")
-			errlog := filepath.Join(cfg.LogDir(), fmt.Sprintf("pgrestore_%s_%s.err", target, ts))
+			errlog := filepath.Join(cfg.LogDir(), "pgrestore_"+naming.Sanitize(target)+"_"+ts+".err")
 			ch <- logEvent{line: "▶ pg_restore → " + target}
 			res, err := pg.RestoreStream(cfg.Local, dump, target, errlog, func(l string) { ch <- logEvent{line: l} })
 			ch <- logEvent{done: true, kind: "restore", restoreRes: res, target: target, err: err}
@@ -141,10 +146,17 @@ func deleteCmd(path string) tea.Cmd {
 	}
 }
 
-// tunnelToggleCmd opens the tunnel if down, or closes it if up.
+// tunnelToggleCmd opens the tunnel if down, or closes it if up. If the
+// port is listening but the tunnel was not opened by pgflow (IsOpen ==
+// false), we report that explicitly so the user does not assume the
+// external tunnel has been torn down.
 func tunnelToggleCmd(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		if tunnel.IsUp(cfg.Prod.Host, cfg.Prod.Port) {
+		up := tunnel.IsUp(cfg.Prod.Host, cfg.Prod.Port)
+		if up && !tunnel.IsOpen() {
+			return tunnelDoneMsg{up: true, external: true, err: fmt.Errorf("el puerto %s ya está abierto por otro proceso — pgflow no lo cierra; ciérralo manualmente", cfg.Prod.Port)}
+		}
+		if up {
 			err := tunnel.Close(cfg.ProdSSH)
 			return tunnelDoneMsg{up: tunnel.IsUp(cfg.Prod.Host, cfg.Prod.Port), err: err}
 		}

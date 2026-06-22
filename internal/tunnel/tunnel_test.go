@@ -178,31 +178,30 @@ func TestEnsureAndClose_FullLifecycle(t *testing.T) {
 
 func TestEnsure_FailedDial_ReapsOrphan(t *testing.T) {
 	resetState()
-	// A port that is *closed* (we bind and immediately release, but to a port
-	// nothing's listening on after the test starts).
-	port := freePort(t)
-	defer useFakeSSH(t, port)()
+	// Make the fake ssh listen on a different port than the one Ensure polls,
+	// so IsUp(c.Prod.Port) never returns true and Ensure times out. We then
+	// verify the orphan (the ssh subprocess) is reaped before Ensure returns.
+	fakePort := freePort(t)
+	defer useFakeSSH(t, fakePort)()
 
-	// Make the fake ssh exit immediately so IsUp never becomes true.
-	orig := newSSHCommand
-	newSSHCommand = func(alias string) *exec.Cmd {
-		cmd := exec.Command(os.Args[0], "--", "-N", alias)
-		cmd.Env = append(os.Environ(),
-			"GO_HELPER_PROCESS=1",
-			"FAKE_SSH_PORT=0", // invalid: Listen will fail, exec exits
-		)
-		return cmd
+	// Ensure polls a different port — pick another free one to guarantee
+	// there is no listener on it.
+	targetPort := freePort(t)
+	for targetPort == fakePort {
+		targetPort = freePort(t)
 	}
-	defer func() { newSSHCommand = orig }()
 
 	c := &config.Config{
 		ProdSSH: "fake-alias",
-		Prod:    config.Conn{Host: "127.0.0.1", Port: port},
+		Prod:    config.Conn{Host: "127.0.0.1", Port: targetPort},
 	}
 	if _, err := Ensure(c); err == nil {
-		t.Fatal("expected Ensure to fail when ssh can't open the listener")
+		t.Fatal("expected Ensure to fail when ssh can't make the port come up")
 	}
 	if IsOpen() {
 		t.Fatal("Ensure must not track a failed tunnel")
 	}
+	// The fake-ssh subprocess should have been killed and reaped by Ensure.
+	// We can't directly observe that without leaking PIDs, but if Ensure
+	// returned without hanging and IsOpen is false, we are confident.
 }

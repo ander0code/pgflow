@@ -31,6 +31,11 @@ type Folder struct {
 
 // Scan reads backupDir into folders (skipping "logs"), each with its dumps,
 // newest first. A missing directory yields no folders and no error.
+//
+// Symlinks at the top level of backupDir are intentionally ignored: a stray
+// or malicious symlink (e.g. etc -> /etc) would otherwise make pgflow list
+// the contents of an arbitrary directory and offer the user destructive
+// actions over it.
 func Scan(backupDir string) ([]Folder, error) {
 	entries, err := os.ReadDir(backupDir)
 	if err != nil {
@@ -45,12 +50,21 @@ func Scan(backupDir string) ([]Folder, error) {
 		if !e.IsDir() || e.Name() == "logs" {
 			continue
 		}
+		// Reject symlinks: e.Type() carries the mode bits from the directory
+		// entry itself (not following it), so ModeSymlink reliably catches
+		// the malicious-redirect case.
+		if e.Type()&os.ModeSymlink != 0 {
+			continue
+		}
 		fpath := filepath.Join(backupDir, e.Name())
 		folder := Folder{Name: e.Name(), Path: fpath}
 
 		dents, _ := os.ReadDir(fpath)
 		for _, d := range dents {
 			if d.IsDir() || !strings.HasSuffix(d.Name(), ".dump") {
+				continue
+			}
+			if d.Type()&os.ModeSymlink != 0 {
 				continue
 			}
 			fi, err := d.Info()

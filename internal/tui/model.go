@@ -14,6 +14,8 @@ import (
 	"github.com/ander0code/pgflow/internal/backups"
 	"github.com/ander0code/pgflow/internal/config"
 	"github.com/ander0code/pgflow/internal/naming"
+	"github.com/ander0code/pgflow/internal/pg"
+	"github.com/ander0code/pgflow/internal/tunnel"
 )
 
 type screen int
@@ -55,11 +57,20 @@ type dashItem struct {
 	dump     backups.Dump
 }
 
+// pickMark is the optional validity indicator on a pickItem.
+type pickMark int
+
+const (
+	pickMarkNone    pickMark = iota // no indicator
+	pickMarkValid                   // ✓ — item verified OK
+	pickMarkInvalid                 // ✗ — item verified corrupt
+)
+
 // pickItem is one option in a wizard picker.
 type pickItem struct {
 	label string
 	value string
-	mark  int // 0 none, 1 ✓ valid, -1 ✗ corrupt
+	mark  pickMark
 	hint  string
 }
 
@@ -177,7 +188,7 @@ func New() *Model {
 	ti.CharLimit = 128
 	ti.Prompt = "❯ "
 
-	return &Model{
+	m := &Model{
 		cfg:         config.Load(),
 		scr:         screenDashboard,
 		modal:       modalNone,
@@ -185,10 +196,44 @@ func New() *Model {
 		input:       ti,
 		splashUntil: time.Now().Add(1400 * time.Millisecond),
 	}
+
+	// Validate the on-disk config up front: a missing or non-writable
+	// backup directory should not silently produce an empty dashboard
+	// (and a confusing "permission denied" much later during dump).
+	if err := ensureBackupDir(m.cfg.BackupDir); err != nil {
+		m.errTitle = "Carpeta de backups no disponible"
+		m.errText = fmt.Sprintf("no se pudo crear/escribir en %q: %v\n\nCorrige PGFLOW_BACKUP_DIR en ~/.pgflow.conf o en la pantalla de Configuración.", m.cfg.BackupDir, err)
+		m.modal = modalError
+	} else if m.cfg.BackupDir == "" {
+		m.errTitle = "Configuración incompleta"
+		m.errText = "PGFLOW_BACKUP_DIR está vacío. Configúralo en la pantalla de Configuración."
+		m.modal = modalError
+	}
+
+	return m
 }
 
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(scanCmd(m.cfg), statusCmd(m.cfg), splashTickCmd(), tickCmd())
+}
+
+// ensureBackupDir creates the backup directory (and its logs subdir) if
+// missing, and verifies it is writable. It returns the first error it
+// encounters so the TUI can surface it via the error modal.
+func ensureBackupDir(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("directorio vacío")
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "logs"), 0o755); err != nil {
+		return err
+	}
+	// Probe writability with a temp file we delete immediately.
+	probe := filepath.Join(dir, ".pgflow-writeprobe")
+	if err := os.WriteFile(probe, []byte{}, 0o600); err != nil {
+		return err
+	}
+	_ = os.Remove(probe)
+	return nil
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -305,7 +350,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.selectPath = msg.dumpRes.File // quedará seleccionado tras el scan
 			if m.bkUsesSeq {
-				_ = naming.BumpSeq(m.bkDB) // autoincrementar el contador de esta db
+				// If the counter doesn't advance, the next backup of this db
+				// would propose the same name and overwrite the dump we just
+				// created. Surface the failure so the user notices.
+				if berr := naming.BumpSeq(m.bkDB); berr != nil {
+					m.setStatus(fmt.Sprintf("⚠ backup listo en %s — no pude avanzar el contador de secuencia: %s",
+						msg.dumpRes.Elapsed.Round(time.Second), berr), true)
+					return m, tea.Batch(scanCmd(m.cfg), statusClearCmd())
+				}
 			}
 			m.setStatus(fmt.Sprintf("✓ backup listo en %s — %s%s",
 				msg.dumpRes.Elapsed.Round(time.Second), filepath.Base(msg.dumpRes.File), extra), false)
@@ -345,9 +397,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.fail("Túnel", msg.err)
 		}
 		m.tunnelOK = msg.up
-		if msg.up {
+		switch {
+		case msg.external:
+			m.setStatus("⚠ el puerto ya estaba abierto por otro proceso — pgflow no lo controla", true)
+		case msg.up:
 			m.setStatus("✓ túnel abierto", false)
-		} else {
+		default:
 			m.setStatus("túnel cerrado", false)
 		}
 		return m, tea.Batch(statusCmd(m.cfg), statusClearCmd())
@@ -537,8 +592,12 @@ func (m *Model) backupSelect() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// proposeDumpName sets the default dump file name for the chosen folder/db,
-// using the folder's saved prefix: "<PREFIX>-<db>-<ts>.dump" (or "<db>_<ts>.dump").
+// proposeDumpName sets the default dump file name for the chosen folder/db.
+// The name is built by naming.Render from the per-database template
+// (naming.Template, falling back to naming.DefaultTemplate(prefix)) and
+// the folder prefix. Tokens: {db} {date} {time} {datetime} {seq} {prefix}.
+// If the template uses {seq}, the counter auto-increments after a
+// successful backup (naming.BumpSeq).
 func (m *Model) proposeDumpName() {
 	folder := filepath.Base(m.bkFolder)
 	m.bkPrefix = naming.Prefix(folder)
@@ -691,9 +750,9 @@ func (m *Model) dumpPicker(folderPath string) picker {
 			continue
 		}
 		for _, d := range f.Dumps {
-			mark := 1
+			mark := pickMarkValid
 			if !d.Valid {
-				mark = -1
+				mark = pickMarkInvalid
 			}
 			items = append(items, pickItem{
 				label: d.Name, value: d.Path, mark: mark,
@@ -753,7 +812,17 @@ func (m *Model) submitInput(p inputPurpose, val string) (tea.Model, tea.Cmd) {
 		if val == "" {
 			return m, nil
 		}
-		path := filepath.Join(m.cfg.BackupDir, sanitizeFolder(val))
+		name := sanitizeFolder(val)
+		if name == "" || name == "__new__" || strings.Contains(name, "..") {
+			return m, m.fail("Nombre inválido", fmt.Errorf("usa letras, dígitos, '-' o '_' (sin puntos ni espacios)"))
+		}
+		path := filepath.Join(m.cfg.BackupDir, name)
+		// Defense-in-depth: reject if the join would escape BackupDir.
+		absBackup, _ := filepath.Abs(m.cfg.BackupDir)
+		absPath, _ := filepath.Abs(path)
+		if !strings.HasPrefix(absPath, absBackup+string(filepath.Separator)) {
+			return m, m.fail("Nombre inválido", fmt.Errorf("el nombre resuelve fuera del directorio de backups"))
+		}
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return m, m.fail("No se pudo crear la carpeta", err)
 		}
@@ -763,6 +832,12 @@ func (m *Model) submitInput(p inputPurpose, val string) (tea.Model, tea.Cmd) {
 	case inpNewDBName:
 		if val == "" {
 			val = m.suggestedName
+		}
+		// Reject characters that PostgreSQL wouldn't accept anyway (e.g. a
+		// ".." would silently mean "current dir" to psql). Also serves as
+		// defense-in-depth for the errlog path (see commands.go).
+		if !pg.ValidIdent(val) {
+			return m, m.fail("Nombre inválido", fmt.Errorf("usa letras, dígitos, '-', '_' o '.' (sin comillas ni espacios)"))
 		}
 		m.rsTarget = val
 		if m.localDBContains(val) {
@@ -797,7 +872,11 @@ func (m *Model) submitInput(p inputPurpose, val string) (tea.Model, tea.Cmd) {
 		return m, statusClearCmd()
 	case inpConfigField:
 		if m.cfgCursor >= 0 && m.cfgCursor < len(m.cfgFields) {
-			m.cfgFields[m.cfgCursor].set(m.cfg, val)
+			f := m.cfgFields[m.cfgCursor]
+			if verr := validateConfigField(f.section, f.label, val); verr != nil {
+				return m, m.fail("Valor inválido", verr)
+			}
+			f.set(m.cfg, val)
 			if err := m.cfg.Save(); err != nil {
 				return m, m.fail("No se pudo guardar", err)
 			}
@@ -806,6 +885,39 @@ func (m *Model) submitInput(p inputPurpose, val string) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// validateConfigField rejects values that would either confuse libpq or be
+// outright dangerous if they ever reached a subprocess argv (e.g. an SSH
+// alias that ssh would parse as an option). Mirrors the allowlist in
+// internal/pg and internal/tunnel.
+func validateConfigField(section, label, val string) error {
+	switch label {
+	case "host":
+		if !pg.ValidHost(val) {
+			return fmt.Errorf("host inválido: %q", val)
+		}
+	case "puerto", "puerto túnel", "puerto remoto":
+		if !pg.ValidPort(val) {
+			return fmt.Errorf("puerto inválido: %q (debe ser 1-65535)", val)
+		}
+	case "usuario":
+		if !pg.ValidIdent(val) {
+			return fmt.Errorf("usuario inválido: %q", val)
+		}
+	case "alias SSH":
+		if !tunnel.ValidAlias(val) {
+			return fmt.Errorf("alias SSH inválido: %q (no puede empezar con '-' ni contener espacios)", val)
+		}
+	case "password":
+		// passwords can legitimately contain almost anything; reject only
+		// the characters that would break the shell-format Save().
+		if strings.ContainsAny(val, "\n\r\x00") {
+			return fmt.Errorf("la contraseña no puede contener saltos de línea")
+		}
+	}
+	// "carpeta" (BackupDir) is left to filepath expansion.
+	return nil
 }
 
 // ── config screen ────────────────────────────────────────────────────────────
@@ -824,7 +936,6 @@ func (m *Model) buildCfgFields() {
 		{"LOCAL", "password", func(c *config.Config) string { return c.Local.Pass }, func(c *config.Config, v string) { c.Local.Pass = v }, true},
 		{"PROD", "alias SSH", func(c *config.Config) string { return c.ProdSSH }, func(c *config.Config, v string) { c.ProdSSH = v }, false},
 		{"PROD", "puerto túnel", func(c *config.Config) string { return c.Prod.Port }, func(c *config.Config, v string) { c.Prod.Port = v }, false},
-		{"PROD", "puerto remoto", func(c *config.Config) string { return c.ProdRemotePort }, func(c *config.Config, v string) { c.ProdRemotePort = v }, false},
 		{"PROD", "usuario", func(c *config.Config) string { return c.Prod.User }, func(c *config.Config, v string) { c.Prod.User = v }, false},
 		{"PROD", "password", func(c *config.Config) string { return c.Prod.Pass }, func(c *config.Config, v string) { c.Prod.Pass = v }, true},
 		{"BACKUPS", "carpeta", func(c *config.Config) string { return c.BackupDir }, func(c *config.Config, v string) { c.BackupDir = v }, false},
@@ -940,9 +1051,13 @@ func (m *Model) folderCount(name string) int {
 	return 0
 }
 
+// localDBContains reports whether the user-supplied db name matches one of
+// the local databases. The comparison is case-insensitive because
+// PostgreSQL folds unquoted identifiers to lower case, so "ShopDB" and
+// "shopdb" would otherwise create two distinct databases.
 func (m *Model) localDBContains(name string) bool {
 	for _, d := range m.localDBs {
-		if d == name {
+		if strings.EqualFold(d, name) {
 			return true
 		}
 	}
@@ -988,12 +1103,17 @@ func (m *Model) rebuildVisible() {
 	}
 }
 
+// sanitizeFolder keeps only filename-safe characters (letters, digits, - _).
+// Spaces become hyphens. Dot is intentionally NOT allowed so the result
+// cannot contain ".." and slip out of the parent directory when joined with
+// BackupDir. Names that sanitize to empty, to ".", to "..", or to the
+// reserved sentinel "__new__" are rejected by the caller.
 func sanitizeFolder(s string) string {
 	s = strings.ReplaceAll(strings.TrimSpace(s), " ", "-")
 	var b strings.Builder
 	for _, r := range s {
 		switch {
-		case r == '-' || r == '_' || r == '.',
+		case r == '-' || r == '_',
 			r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 			b.WriteRune(r)
 		}

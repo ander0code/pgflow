@@ -70,8 +70,9 @@ type deleteDoneMsg struct {
 }
 
 type tunnelDoneMsg struct {
-	up  bool
-	err error
+	up       bool
+	external bool // true if the port was already up but pgflow didn't open it
+	err      error
 }
 
 type connTestMsg struct {

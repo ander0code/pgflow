@@ -599,9 +599,9 @@ func (m *Model) renderPickerPanel(width, height int) string {
 func (m *Model) renderPickRow(it pickItem, selected bool, w int) string {
 	gl := " "
 	switch it.mark {
-	case 1:
+	case pickMarkValid:
 		gl = "✓"
-	case -1:
+	case pickMarkInvalid:
 		gl = "✗"
 	}
 	label := it.label

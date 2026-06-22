@@ -71,10 +71,24 @@ go run .                  # necesita un TTY real (no pipelines)
 ### Cross-compile
 
 ```sh
-make build-all            # → dist/pgflow-{darwin,linux,windows}-{amd64,arm64}[.exe]
+make build-all            # → dist/pgflow-{darwin,linux,windows}-{amd64,arm64}[.exe] + checksums.txt
 ```
 
 Los binarios Windows llevan sufijo `.exe`; los Unix no.
+
+### Verificación SHA256 (recomendada)
+
+Cada release publica `dist/checksums.txt` con el SHA256 de cada binario.
+Los instaladores (`install.sh` / `install.ps1`) lo descargan y verifican
+**automáticamente**; si la firma no coincide, no instalan. Para verificar
+manualmente tras descargar:
+
+```sh
+sha256sum -c dist/checksums.txt   # macOS / Linux
+```
+```powershell
+Get-FileHash dist\pgflow-windows-amd64.exe -Algorithm SHA256   # Windows
+```
 
 ## Requisitos
 
@@ -298,10 +312,38 @@ Tras cualquier cambio de UI, corre el snapshot test para verlo:
 go test ./internal/tui/ -run TestSnapshot -v
 ```
 
+## Nombre de los dumps
+
+El nombre del archivo `.dump` se arma con una **plantilla por base de datos** (tokenizable), un **prefijo por carpeta** (opcional), y un **contador autoincremental** (opcional, si la plantilla lo usa). Todo vive en `~/.pgflow.json`.
+
+**Defaults:**
+
+- Con prefijo de carpeta: `{prefix}-{db}-{datetime}` → `TIENDA-WEB-shopdb-20260621_183045.dump`
+- Sin prefijo: `{db}_{datetime}` → `shopdb_20260621_183045.dump`
+
+**Tokens disponibles en la plantilla:**
+
+| Token | Valor |
+|---|---|
+| `{db}` | nombre de la base |
+| `{date}` | fecha en formato `YYYYMMDD` |
+| `{time}` | hora en formato `HHMMSS` |
+| `{datetime}` | fecha + hora, `YYYYMMDD_HHMMSS` |
+| `{seq}` | contador autoincremental de 3 dígitos (001, 002, ...) |
+| `{prefix}` | el prefijo configurado en la carpeta destino |
+
+**Cómo editarlo:** en el paso **Confirmar** del backup:
+
+- `e` — editar el nombre del archivo concreto (no persistente)
+- `t` — editar la plantilla por db (se guarda en `~/.pgflow.json`)
+- `p` — editar el prefijo de la carpeta destino (se guarda)
+
+Si la plantilla usa `{seq}`, el contador se **autoincrementa automáticamente** cada vez que un backup termina OK.
+
 ## Limitaciones conocidas
 
-- **Sin scroll** en listas largas: si una carpeta tiene más dumps de los que caben en el panel, los de abajo se recortan (el cursor se mueve pero la vista no lo sigue). Pendiente: viewport con scroll (`bubbles/viewport`) en `renderBackupList` y `renderRunScreen`.
-- **No se adoptan túneles externos.** Si abres el túnel por tu cuenta (sin que pgflow lo gestione), pgflow lo detecta con `IsUp` pero no puede cerrarlo. Cierra el ssh manualmente.
+- **Scroll parcial.** El dashboard y los pickers tienen scroll implementado (`windowBounds` + `scrollHint`) — el cursor se mantiene visible y aparece un indicador `pos/total ↑↓`. La pantalla de log en vivo durante dump/restore (`renderRunScreen`) muestra los últimos N líneas sin scroll interactivo (suficiente para esa vista).
+- **No se adoptan túneles externos.** Si abres el túnel por tu cuenta (sin que pgflow lo gestione), pgflow lo detecta con `IsUp` pero al pulsar `c` para cerrarlo reporta "puerto abierto por otro proceso — pgflow no lo controla" en vez de intentar matarlo.
 - **Windows < 10 1809 no soportado** porque no trae `ssh.exe` built-in. Funciona si instalas OpenSSH manualmente, pero no es ruta soportada oficialmente.
 
 ## Licencia

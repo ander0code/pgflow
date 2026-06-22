@@ -19,10 +19,11 @@ PGFLOW_LOCAL_PASS="tu_password_local"      # o déjalo vacío y usa ~/.pgpass
 #       HostName 1.2.3.4
 #       User deploy
 #       LocalForward 5433 localhost:5432
+# El puerto de postgres en el servidor va dentro de LocalForward
+# (no en pgflow.conf).
 PGFLOW_PROD_SSH="mi-servidor-db"
 PGFLOW_PROD_HOST="localhost"
 PGFLOW_PROD_PORT="5433"                     # extremo local del túnel
-PGFLOW_PROD_REMOTE_PORT="5432"             # puerto de postgres en el servidor
 PGFLOW_PROD_USER="tu_usuario_prod"
 PGFLOW_PROD_PASS=""                         # recomendado: vacío + ~/.pgpass
 

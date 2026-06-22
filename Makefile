@@ -4,6 +4,9 @@ LDFLAGS     := -ldflags="-s -w -X main.version=$(VERSION)"
 INSTALL_DIR ?= $(HOME)/.local/bin
 DIST_DIR    := dist
 
+# NOTE: `install` / `uninstall` need GNU/BSD install(1). On Windows, use
+#       install.ps1 / uninstall.ps1 instead.
+#
 # Supported platforms for releases
 PLATFORMS   := \
 	darwin/amd64 \
@@ -20,15 +23,16 @@ all: test build
 ## help: show this help
 help:
 	@echo "pgflow — make targets:"
+	@echo "  all          test + build"
 	@echo "  build        build the binary for the current platform"
-	@echo "  run          build and run the TUI"
+	@echo "  run          build and launch the TUI"
 	@echo "  test         run the test suite"
 	@echo "  vet          static analysis"
 	@echo "  tidy         go mod tidy"
 	@echo "  install      install to \$$INSTALL_DIR"
 	@echo "  uninstall    remove from \$$INSTALL_DIR"
 	@echo "  clean        remove build artifacts"
-	@echo "  build-all    cross-compile for darwin/linux/windows × amd64/arm64 → dist/"
+	@echo "  build-all    cross-compile for all supported platforms → dist/ (+ checksums.txt)"
 	@echo "  release      alias for build-all"
 
 ## build: build the binary for the current platform
@@ -79,7 +83,12 @@ build-all: clean
 		echo "  → $$out"; \
 		GOOS=$$os GOARCH=$$arch go build $(LDFLAGS) -o $$out . ; \
 	done
+	@cd $(DIST_DIR) && sha256sum $(BINARY)-* > checksums.txt
+	@echo "  → $(DIST_DIR)/checksums.txt"
 	@ls -lh $(DIST_DIR)
 
-## release: alias for build-all
+## release: build all targets + generate checksums.txt in dist/
 release: build-all
+	@echo ""
+	@echo "Listo. Sube con:"
+	@echo "  gh release create vX.Y.Z dist/* --title vX.Y.Z --generate-notes"

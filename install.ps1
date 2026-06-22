@@ -30,14 +30,49 @@ $url = "https://github.com/$Repo/releases/latest/download/$asset"
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 $dest = Join-Path $InstallDir "$ToolName.exe"
 
-# ── descargar binario prebuilt ───────────────────────────────────────────────────
+# ── descargar binario prebuilt + checksums.txt, verificar SHA256 ──────────────
+$ReleaseBase = "https://github.com/$Repo/releases/latest/download"
+$ChecksumsUrl = "$ReleaseBase/checksums.txt"
+$TmpBin = Join-Path $env:TEMP "pgflow-install.exe"
+$TmpChecksums = Join-Path $env:TEMP "pgflow-checksums.txt"
+
 $downloaded = $false
+$downloadError = $null
 try {
-    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
-    $downloaded = $true
-    Write-Host ("✅  Descargado e instalado → " + $dest) -ForegroundColor Green
+    Invoke-WebRequest -Uri $url -OutFile $TmpBin -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri $ChecksumsUrl -OutFile $TmpChecksums -UseBasicParsing
+    } catch { $ChecksumsUrl = $null } # release may exist without checksums yet
+    $line = if ($ChecksumsUrl) { Select-String -Path $TmpChecksums -Pattern "  $asset$" | Select-Object -First 1 } else { $null }
+    if ($line) {
+        $expected = ($line -split '\s+')[0].ToLower()
+        $actual = (Get-FileHash -Algorithm SHA256 -Path $TmpBin).Hash.ToLower()
+        if ($actual -eq $expected) {
+            Write-Host "✅  SHA256 verificado" -ForegroundColor Green
+            Move-Item -Path $TmpBin -Destination $dest -Force
+            $downloaded = $true
+            Write-Host ("✅  Descargado e instalado → " + $dest) -ForegroundColor Green
+        } else {
+            Write-Host "❌  SHA256 no coincide (esperado $expected, obtuve $actual)." -ForegroundColor Red
+            Write-Host "    La descarga puede estar comprometida. Mira: $ReleaseBase"
+            Remove-Item -Path $TmpBin -ErrorAction SilentlyContinue
+            exit 1
+        }
+    } elseif ($ChecksumsUrl) {
+        Write-Host "⚠️  checksums.txt no incluye $asset — instalo sin verificación." -ForegroundColor Yellow
+        Move-Item -Path $TmpBin -Destination $dest -Force
+        $downloaded = $true
+        Write-Host ("✅  Descargado e instalado → " + $dest) -ForegroundColor Green
+    } else {
+        Write-Host "⚠️  No hay checksums.txt en el release — instalo sin verificación." -ForegroundColor Yellow
+        Move-Item -Path $TmpBin -Destination $dest -Force
+        $downloaded = $true
+        Write-Host ("✅  Descargado e instalado → " + $dest) -ForegroundColor Green
+    }
 } catch {
-    Write-Host ("⚠️   No se pudo descargar (" + $url + ").") -ForegroundColor Yellow
+    $downloadError = $_
+    Write-Host ("⚠️   No se pudo descargar (" + $url + "): " + $_.Exception.Message) -ForegroundColor Yellow
+    Remove-Item -Path $TmpBin -ErrorAction SilentlyContinue
 }
 
 # ── fallback: compilar del código si hay Go y estamos en un clon ──────────────────
@@ -49,7 +84,10 @@ if (-not $downloaded) {
         try { go build -ldflags="-s -w" -o $dest . } finally { Pop-Location }
         Write-Host ("✅  Compilado e instalado → " + $dest) -ForegroundColor Green
     } else {
-        Write-Host "    Revisa que exista un release: https://github.com/$Repo/releases" -ForegroundColor Yellow
+        Write-Host "    Para verificar el binario, clona el repo y corre:"
+        Write-Host "      Get-FileHash dist\pgflow-windows-amd64.exe -Algorithm SHA256"
+        Write-Host "    y compara con https://github.com/$Repo/releases/latest/download/checksums.txt"
+        Write-Host "    O instala Go y reintenta el instalador."
         exit 1
     }
 }

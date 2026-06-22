@@ -31,6 +31,19 @@ func run(name string, environ []string, args ...string) (stdout, stderr string, 
 	return so.String(), se.String(), err
 }
 
+// psqlRun validates the connection fields and the database name against a
+// strict allowlist before invoking psql. Validation failures return
+// (stderr, err) with err non-nil, so the caller can treat them the same as
+// any other psql failure (which is also what they are from the user's
+// perspective).
+func psqlRun(c config.Conn, db string, extra ...string) (stdout, stderr string, err error) {
+	args, aerr := psqlArgs(c, db, extra...)
+	if aerr != nil {
+		return "", aerr.Error(), aerr
+	}
+	return run("psql", env(c.Pass), args...)
+}
+
 // runStreaming runs a command, forwarding each stderr line to onLine as it
 // arrives (for live logs) while also buffering the full output into buf.
 func runStreaming(cmd *exec.Cmd, buf *bytes.Buffer, onLine func(string)) error {
@@ -64,25 +77,87 @@ func env(pass string) []string {
 	return e
 }
 
-func psqlArgs(c config.Conn, db string, extra ...string) []string {
+// psqlArgs builds the argv for a libpq CLI invocation. Each field is
+// validated against a strict allowlist so a misconfigured ~/.pgflow.conf
+// (or a shared dotfiles repo) cannot smuggle extra options to psql / pg_dump
+// / pg_restore (e.g. c.Host = "-cDROP DATABASE postgres").
+func psqlArgs(c config.Conn, db string, extra ...string) ([]string, error) {
+	if !ValidHost(c.Host) {
+		return nil, fmt.Errorf("host inválido: %q", c.Host)
+	}
+	if !ValidPort(c.Port) {
+		return nil, fmt.Errorf("puerto inválido: %q", c.Port)
+	}
+	if !ValidIdent(c.User) {
+		return nil, fmt.Errorf("usuario inválido: %q", c.User)
+	}
+	if !ValidIdent(db) {
+		return nil, fmt.Errorf("base de datos inválida: %q", db)
+	}
 	args := []string{"-w", "-h", c.Host, "-p", c.Port, "-U", c.User, "-d", db}
-	return append(args, extra...)
+	return append(args, extra...), nil
+}
+
+// ValidHost accepts hostnames, IPv4 and bracketed IPv6 literals. It is
+// exported so the TUI config editor can validate user input before it
+// reaches a libpq argv slot.
+func ValidHost(s string) bool {
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for _, r := range s {
+		if !(r == '.' || r == '-' || r == ':' || r == '[' || r == ']' ||
+			(r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidPort accepts a numeric port string. Exported for the TUI.
+func ValidPort(s string) bool {
+	if s == "" || len(s) > 5 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidIdent allows the characters that are safe in a PostgreSQL identifier
+// (or a libpq argument value) — letters, digits, _, -, ., @. It is exposed
+// because the TUI uses it to reject user input before it ever reaches a
+// psql / pg_dump / pg_restore argv slot.
+func ValidIdent(s string) bool {
+	if s == "" || len(s) > 63 {
+		return false
+	}
+	for _, r := range s {
+		if !(r == '_' || r == '-' || r == '.' || r == '@' ||
+			(r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+			return false
+		}
+	}
+	return true
 }
 
 // TestConn checks connectivity and returns the server version on success.
 func TestConn(c config.Conn) (version string, err error) {
-	_, se, e := run("psql", env(c.Pass), psqlArgs(c, "postgres", "-c", "SELECT 1;")...)
+	_, se, e := psqlRun(c, "postgres", "-c", "SELECT 1;")
 	if e != nil {
 		return "", classifyConnError(se, e)
 	}
-	v, _, _ := run("psql", env(c.Pass), psqlArgs(c, "postgres", "-t", "-A", "-c", "SHOW server_version;")...)
+	v, _, _ := psqlRun(c, "postgres", "-t", "-A", "-c", "SHOW server_version;")
 	return strings.TrimSpace(v), nil
 }
 
 // ListDatabases returns the non-template, user databases sorted by name.
 func ListDatabases(c config.Conn) ([]string, error) {
 	const q = `SELECT datname FROM pg_database WHERE datistemplate=false AND datname NOT IN ('postgres','rdsadmin') ORDER BY datname;`
-	out, se, err := run("psql", env(c.Pass), psqlArgs(c, "postgres", "-t", "-A", "-c", q)...)
+	out, se, err := psqlRun(c, "postgres", "-t", "-A", "-c", q)
 	if err != nil {
 		return nil, classifyConnError(se, err)
 	}
@@ -95,17 +170,13 @@ func ListDatabases(c config.Conn) ([]string, error) {
 	return dbs, nil
 }
 
-// DatabaseExists reports whether a database with the given name exists.
-func DatabaseExists(c config.Conn, name string) bool {
-	q := fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname='%s';", escapeLiteral(name))
-	out, _, err := run("psql", env(c.Pass), psqlArgs(c, "postgres", "-t", "-A", "-c", q)...)
-	return err == nil && strings.TrimSpace(out) == "1"
-}
-
 // CreateDatabase creates a new database.
 func CreateDatabase(c config.Conn, name string) error {
+	if !ValidIdent(name) {
+		return fmt.Errorf("nombre de base inválido: %q", name)
+	}
 	q := fmt.Sprintf(`CREATE DATABASE "%s";`, escapeIdent(name))
-	_, se, err := run("psql", env(c.Pass), psqlArgs(c, "postgres", "-c", q)...)
+	_, se, err := psqlRun(c, "postgres", "-c", q)
 	if err != nil {
 		if strings.Contains(strings.ToLower(se), "permission denied") {
 			return fmt.Errorf("sin permiso para crear la base (el usuario necesita rol CREATEDB)")
@@ -118,25 +189,38 @@ func CreateDatabase(c config.Conn, name string) error {
 // RecreateDatabase drops and recreates a database, first terminating any active
 // connections to it. This is the destructive REPLACE path.
 func RecreateDatabase(c config.Conn, name string) error {
+	if !ValidIdent(name) {
+		return fmt.Errorf("nombre de base inválido: %q", name)
+	}
 	ident := escapeIdent(name)
 	lit := escapeLiteral(name)
 
-	run("psql", env(c.Pass), psqlArgs(c, "postgres", "-c",
-		fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='%s' AND pid <> pg_backend_pid();", lit))...)
+	// Best effort: terminating existing connections is a hint, not a guarantee.
+	// A failure here is reported alongside the DROP result so the user
+	// understands the cascade ("no pude cerrar conexiones" → "DROP falla").
+	termOut, termSE, termErr := psqlRun(c, "postgres", "-c",
+		fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='%s' AND pid <> pg_backend_pid();", lit))
 
-	_, se, err := run("psql", env(c.Pass), psqlArgs(c, "postgres", "-c", fmt.Sprintf(`DROP DATABASE IF EXISTS "%s";`, ident))...)
+	_, se, err := psqlRun(c, "postgres", "-c", fmt.Sprintf(`DROP DATABASE IF EXISTS "%s";`, ident))
 	if err != nil {
 		low := strings.ToLower(se)
 		if strings.Contains(low, "being accessed") || strings.Contains(low, "other users") {
-			return fmt.Errorf("hay conexiones activas a '%s'; ciérralas y reintenta", name)
+			extra := ""
+			if termErr != nil {
+				extra = fmt.Sprintf(" (y pg_terminate_backend falló: %s)", firstLine(termSE))
+			}
+			return fmt.Errorf("hay conexiones activas a '%s'; ciérralas y reintenta%s", name, extra)
 		}
 		return fmt.Errorf("no se pudo eliminar '%s': %s", name, firstLine(se))
 	}
 
-	_, se, err = run("psql", env(c.Pass), psqlArgs(c, "postgres", "-c", fmt.Sprintf(`CREATE DATABASE "%s";`, ident))...)
+	_, se, err = psqlRun(c, "postgres", "-c", fmt.Sprintf(`CREATE DATABASE "%s";`, ident))
 	if err != nil {
 		return fmt.Errorf("no se pudo crear '%s': %s", name, firstLine(se))
 	}
+	// termOut kept to silence the unused-var check; the result is informational
+	// and we don't want to bother the user on success.
+	_ = termOut
 	return nil
 }
 
@@ -150,6 +234,9 @@ type DumpResult struct {
 // DumpStream exports a database in custom format (-F c, --verbose), forwarding
 // each progress line to onLine. On failure the partial file is removed.
 func DumpStream(c config.Conn, db, outFile, errLog string, onLine func(string)) (DumpResult, error) {
+	if !ValidHost(c.Host) || !ValidPort(c.Port) || !ValidIdent(c.User) || !ValidIdent(db) {
+		return DumpResult{}, fmt.Errorf("campos de conexión o nombre de base inválidos")
+	}
 	start := time.Now()
 	cmd := exec.Command("pg_dump", "-h", c.Host, "-p", c.Port, "-U", c.User,
 		"-F", "c", "--verbose", "--no-password", "-f", outFile, db)
@@ -158,10 +245,16 @@ func DumpStream(c config.Conn, db, outFile, errLog string, onLine func(string)) 
 	var buf bytes.Buffer
 	err := runStreaming(cmd, &buf, onLine)
 	elapsed := time.Since(start)
-	writeLog(errLog, buf.Bytes())
+	if werr := writeLog(errLog, buf.Bytes()); werr != nil && err == nil {
+		// The dump itself succeeded but persisting its log failed — surface
+		// this so the user is not left wondering why the .err file is missing.
+		err = fmt.Errorf("dump OK pero no pude escribir el log: %w", werr)
+	}
 
 	if err != nil {
-		os.Remove(outFile) // drop the incomplete dump
+		if rmErr := os.Remove(outFile); rmErr != nil && !os.IsNotExist(rmErr) {
+			err = fmt.Errorf("%w (además no pude borrar el dump parcial: %v)", err, rmErr)
+		}
 		return DumpResult{Elapsed: elapsed}, classifyDumpError(buf.String(), c.User, err)
 	}
 	return DumpResult{
@@ -183,6 +276,9 @@ type RestoreResult struct {
 // transaction (all-or-nothing), forwarding each --verbose line to onLine. A
 // non-fatal exit (code 1) is reported as "warnings".
 func RestoreStream(c config.Conn, dumpFile, target, errLog string, onLine func(string)) (RestoreResult, error) {
+	if !ValidHost(c.Host) || !ValidPort(c.Port) || !ValidIdent(c.User) || !ValidIdent(target) {
+		return RestoreResult{}, fmt.Errorf("campos de conexión o base destino inválidos")
+	}
 	start := time.Now()
 	cmd := exec.Command("pg_restore", "-h", c.Host, "-p", c.Port, "-U", c.User,
 		"-d", target, "-F", "c", "--verbose", "--no-owner", "--no-privileges", "--single-transaction", dumpFile)
@@ -191,7 +287,9 @@ func RestoreStream(c config.Conn, dumpFile, target, errLog string, onLine func(s
 	var buf bytes.Buffer
 	err := runStreaming(cmd, &buf, onLine)
 	elapsed := time.Since(start)
-	writeLog(errLog, buf.Bytes())
+	if werr := writeLog(errLog, buf.Bytes()); werr != nil && err == nil {
+		err = fmt.Errorf("restore OK pero no pude escribir el log: %w", werr)
+	}
 
 	res := RestoreResult{Elapsed: elapsed}
 	if err == nil {
@@ -241,7 +339,7 @@ func Verify(file string) VerifyResult {
 // CountTables counts BASE TABLE entries in the public schema of db.
 func CountTables(c config.Conn, db string) int {
 	const q = `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';`
-	out, _, err := run("psql", env(c.Pass), psqlArgs(c, db, "-t", "-A", "-c", q)...)
+	out, _, err := psqlRun(c, db, "-t", "-A", "-c", q)
 	if err != nil {
 		return 0
 	}
@@ -341,12 +439,24 @@ func classifyRestoreError(stderr string, err error) error {
 
 // ── small helpers ────────────────────────────────────────────────────────────
 
-func writeLog(path string, data []byte) {
+// writeLog persists the captured stderr of a pg_* invocation. The file is
+// created with mode 0600 because it can contain the SQL pg_dump/pg_restore
+// emitted during --verbose runs (statements, DDL, table data in failure
+// messages) — i.e. information a co-located user could use to map the
+// schema or extract values from a failed INSERT.
+func writeLog(path string, data []byte) error {
 	if path == "" || len(data) == 0 {
-		return
+		return nil
 	}
-	os.MkdirAll(filepath.Dir(path), 0o755)
-	os.WriteFile(path, data, 0o644)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	// Re-apply the mode in case the file pre-existed (defense vs. legacy 0o644).
+	_ = os.Chmod(path, 0o600)
+	return nil
 }
 
 func exitCode(err error) int {

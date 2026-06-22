@@ -87,6 +87,13 @@ func TestViewAcrossStates(t *testing.T) {
 	mustRender(t, m, "backup-edit-name")
 	m.startInput(inpTemplate, "plantilla", "{db}_{datetime}")
 	mustRender(t, m, "backup-edit-template")
+	m.startInput(inpFolderPrefix, "prefijo", "TIENDA")
+	mustRender(t, m, "backup-edit-prefix")
+
+	// inpNewFolder (step 2 picker has "+ Crear carpeta nueva")
+	m.step = 2
+	m.startInput(inpNewFolder, "carpeta", "mi-proyecto")
+	mustRender(t, m, "backup-edit-newfolder")
 
 	// restore wizard
 	r := newSized()
@@ -112,6 +119,8 @@ func TestViewAcrossStates(t *testing.T) {
 	c := newSized()
 	c.openConfig()
 	mustRender(t, c, "config")
+	c.startInput(inpConfigField, "host", c.cfg.Local.Host)
+	mustRender(t, c, "config-edit-field")
 	c.running, c.runLabel = true, "trabajando…"
 	mustRender(t, c, "running (spinner)")
 	c.streaming, c.runStart = true, time.Now()

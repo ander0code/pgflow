@@ -15,7 +15,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b3620eeebfac8534f1c3381dede11670f22cd14ac240a84088 # v4.2.2
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fb7d9d534f0291014ff15cd4c3a6743aaffac9e39d # v5.4.0
+        with:
+          go-version: "1.25"
+          cache: true
 
       - name: force LF line endings (Windows-safe)
         if: matrix.os == 'windows-latest'
@@ -26,11 +30,6 @@ jobs:
           # enforces eol=lf, but we also re-checkout to be sure.
           git config --global core.autocrlf input
           git checkout HEAD -- .
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
-          cache: true
 
       - name: go build
         run: go build ./...
@@ -47,6 +46,12 @@ jobs:
             exit 1
           fi
 
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
       - name: go test
         run: go test -race -timeout 120s ./...
 
@@ -59,7 +64,7 @@ jobs:
         goos: [darwin, linux, windows]
         goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b3620eeebfac8534f1c3381dede11670f22cd14ac240a84088 # v4.2.2
 
       - name: force LF line endings (Windows-safe)
         shell: bash
@@ -67,7 +72,7 @@ jobs:
           git config --global core.autocrlf input
           git checkout HEAD -- .
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fb7d9d534f0291014ff15cd4c3a6743aaffac9e39d # v5.4.0
         with:
           go-version: "1.25"
           cache: true
@@ -77,7 +82,12 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
+          ver="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          go build -ldflags="-s -w" -o "pgflow-$GOOS-$GOARCH$ext" .
-          ls -lh "pgflow-$GOOS-$GOARCH$ext"
+          out="pgflow-$GOOS-$GOARCH$ext"
+          go build -ldflags="-s -w -X main.version=$ver" -o "$out" .
+          # Smoke test: the binary must at least print its version.
+          ./pgflow-$GOOS-$GOARCH$ext --version
+          ./pgflow-$GOOS-$GOARCH$ext --help
+          ls -lh "$out"
