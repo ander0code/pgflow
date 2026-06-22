@@ -79,8 +79,12 @@ func TestViewAcrossStates(t *testing.T) {
 	mustRender(t, m, "backup-step1")
 	m.backupSelect()
 	mustRender(t, m, "backup-step2")
-	m.bkFolder, m.step = "/b/tienda-web", 3
+	m.bkFolder = "/b/tienda-web"
+	m.proposeDumpName()
+	m.step = 3
 	mustRender(t, m, "backup-confirm")
+	m.startInput(inpDumpName, "nombre", m.bkFile)
+	mustRender(t, m, "backup-edit-name")
 
 	// restore wizard
 	r := newSized()
@@ -156,7 +160,9 @@ func TestSnapshot(t *testing.T) {
 	b := newSized()
 	b.scr, b.step = screenBackup, 3
 	b.bkDB = "shopdb"
-	b.bkFolder = "/srv/backups/shopdb"
+	b.bkFolder = "/srv/backups/tienda-web"
+	b.bkPrefix = "TIENDA_PROD"
+	b.bkFile = "TIENDA_PROD-shopdb-20260622_104207.dump"
 	b.cfg.Prod.User, b.cfg.Prod.Host, b.cfg.Prod.Port, b.cfg.ProdSSH = "produser", "localhost", "5433", "mi-servidor"
 	snap("BACKUP · confirm", b)
 

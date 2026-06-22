@@ -618,6 +618,10 @@ func (m *Model) renderInputPanel() string {
 			name = f.section + " · " + f.label
 		}
 		title, hint = "✎  Editar "+name, "Enter guarda · Esc cancela"
+	case inpDumpName:
+		title, hint = "✎  Nombre del archivo", "Se guarda en la carpeta destino · Enter ok · Esc cancela"
+	case inpFolderPrefix:
+		title, hint = "🏷  Prefijo de la carpeta", "Se aplica a los dumps de esta carpeta · vacío = sin prefijo"
 	}
 	w := m.modalWidth()
 	content := strings.Join([]string{
@@ -654,14 +658,19 @@ func (m *Model) renderConfirm() string {
 	if m.scr == screenBackup {
 		origin := fmt.Sprintf("%s@%s:%s · túnel %s",
 			m.cfg.Prod.User, m.cfg.Prod.Host, m.cfg.Prod.Port, quoteOrDash(m.cfg.ProdSSH))
+		folderLabel := filepathBase(m.bkFolder)
+		if m.bkPrefix != "" {
+			folderLabel += "  (prefijo: " + m.bkPrefix + ")"
+		}
 		rows := []string{
 			modalTitleStyle.Render("Resumen del backup"),
 			"",
 			field("base", m.bkDB, false),
 			field("origen", origin, false),
-			field("carpeta", m.bkFolder, true),
+			field("carpeta", folderLabel, false),
+			field("archivo", m.bkFile, true),
 			"",
-			modalHintStyle.Render(truncate("  Se exporta con pg_dump -F c y se verifica al terminar.", w-6)),
+			modalHintStyle.Render(truncate("  e editar nombre · p prefijo de la carpeta", w-6)),
 			modalHintStyle.Render(truncate("  ⓘ el rol debe poder leer toda la base (GRANT pg_read_all_data).", w-6)),
 			"",
 			confirmButtons("Sí, ejecutar el backup", false),

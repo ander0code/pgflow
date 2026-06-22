@@ -64,15 +64,15 @@ func localDBsCmd(cfg *config.Config) tea.Cmd {
 
 // streamDumpCmd starts pg_dump in a goroutine and returns a channel of log
 // events (progress lines + a final result).
-func streamDumpCmd(cfg *config.Config, db, folder string) tea.Cmd {
+func streamDumpCmd(cfg *config.Config, db, folder, filename string) tea.Cmd {
 	return func() tea.Msg {
 		ch := make(chan logEvent, 256)
 		go func() {
 			defer close(ch)
+			out := filepath.Join(folder, filename)
 			ts := time.Now().Format("20060102_150405")
-			out := filepath.Join(folder, fmt.Sprintf("%s_%s.dump", db, ts))
 			errlog := filepath.Join(cfg.LogDir(), fmt.Sprintf("pgdump_%s_%s.err", db, ts))
-			ch <- logEvent{line: "▶ pg_dump " + db + " → " + filepath.Base(out)}
+			ch <- logEvent{line: "▶ pg_dump " + db + " → " + filename}
 			res, err := pg.DumpStream(cfg.Prod, db, out, errlog, func(l string) { ch <- logEvent{line: l} })
 			ch <- logEvent{done: true, kind: "dump", dumpRes: res, err: err}
 		}()

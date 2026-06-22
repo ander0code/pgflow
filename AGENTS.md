@@ -87,6 +87,7 @@ internal/tunnel/tunnel_unix.go     hideWindow no-op   (//go:build !windows)
 internal/tunnel/tunnel_windows.go  hideWindow → CREATE_NO_WINDOW (//go:build windows)
 internal/tunnel/tunnel_test.go     test del ciclo abrir/cerrar (inyecta un ssh falso)
 internal/backups/backups.go  Folder{Name,Path,Dumps}, Dump{Name,Path,SizeBytes,ModTime,Valid,Objects}; Scan, Total
+internal/naming/naming.go    prefijo por carpeta (~/.pgflow.json) + nombre del dump: Prefix/SetPrefix/DumpFileName
 internal/tui/model.go        Model, Init, Update, key handling, wizard/flow logic
 internal/tui/render.go       View y todas las funciones render*
 internal/tui/styles.go       paleta (Catppuccin Mocha + morado Charm) y estilos lipgloss
@@ -109,7 +110,9 @@ uninstall.sh / uninstall.ps1 desinstaladores
 
 **Pantallas** (`m.scr`): `screenDashboard`, `screenBackup`, `screenRestore`, `screenConfig`.
 **Modales** (`m.modal`): `modalNone`, `modalConfirmDelete`, `modalError`, `modalHelp`.
-**Input compartido** (`m.inputPurpose`): `inpNewFolder`, `inpNewDBName`, `inpConfigField` (usa `bubbles/textinput`).
+**Input compartido** (`m.inputPurpose`): `inpNewFolder`, `inpNewDBName`, `inpConfigField`, `inpDumpName`, `inpFolderPrefix` (usa `bubbles/textinput`).
+
+**Nombre del dump (paso Confirmar del backup):** el confirm muestra `archivo` = `naming.DumpFileName(prefijoCarpeta, db, ts)` → `<PREFIX>-<db>-<ts>.dump` (o `<db>_<ts>.dump` sin prefijo). `e` edita el nombre (`inpDumpName`), `p` define el prefijo de la carpeta (`inpFolderPrefix`, guardado en `~/.pgflow.json` vía `internal/naming`). `proposeDumpName()` calcula el default; el nombre elegido se pasa a `streamDumpCmd`.
 
 **Asistentes = máquina de estados por `m.step`:**
 - Backup: `1` elegir base → `2` elegir/crear carpeta → `3` confirmar → stream.
@@ -167,6 +170,9 @@ PGFLOW_MIN_DISK_MB
 ```
 
 Las contraseñas pueden ir vacías y usar `~/.pgpass`. Plantilla: `pgflow.conf.example`.
+
+Los **prefijos por carpeta** viven aparte en `~/.pgflow.json` (`{"prefixes":{"<carpeta>":"<PREFIJO>"}}`),
+gestionados por `internal/naming`. También en `.gitignore` por estar en `$HOME` (nunca se commitea).
 
 ## Notas operativas
 

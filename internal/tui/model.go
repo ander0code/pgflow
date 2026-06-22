@@ -13,6 +13,7 @@ import (
 
 	"github.com/ander0code/pgflow/internal/backups"
 	"github.com/ander0code/pgflow/internal/config"
+	"github.com/ander0code/pgflow/internal/naming"
 )
 
 type screen int
@@ -40,6 +41,8 @@ const (
 	inpNewFolder
 	inpNewDBName
 	inpConfigField
+	inpDumpName
+	inpFolderPrefix
 )
 
 var tsSuffix = regexp.MustCompile(`_\d{8}_\d{6}$`)
@@ -145,6 +148,8 @@ type Model struct {
 	// backup flow
 	bkDB     string
 	bkFolder string
+	bkFile   string // nombre propuesto del dump (editable en el confirm)
+	bkPrefix string // prefijo de la carpeta destino (para mostrar)
 
 	// restore flow
 	rsFolder      string
@@ -482,6 +487,19 @@ func (m *Model) handleBackupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pick.move(1)
 	case "left", "h":
 		return m.backupBack()
+	case "e":
+		if m.step == 3 {
+			m.startInput(inpDumpName, "nombre del archivo", m.bkFile)
+		}
+	case "p":
+		if m.step == 3 {
+			folder := filepath.Base(m.bkFolder)
+			cur := naming.Prefix(folder)
+			if cur == "" {
+				cur = naming.Recommend(folder)
+			}
+			m.startInput(inpFolderPrefix, "prefijo de la carpeta", cur)
+		}
 	case "enter":
 		return m.backupSelect()
 	}
@@ -501,11 +519,21 @@ func (m *Model) backupSelect() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.bkFolder = it.value
+		m.proposeDumpName()
 		m.step = 3
 	case 3:
-		return m.startStream("Backup · "+m.bkDB, streamDumpCmd(m.cfg, m.bkDB, m.bkFolder))
+		return m.startStream("Backup · "+m.bkDB, streamDumpCmd(m.cfg, m.bkDB, m.bkFolder, m.bkFile))
 	}
 	return m, nil
+}
+
+// proposeDumpName sets the default dump file name for the chosen folder/db,
+// using the folder's saved prefix: "<PREFIX>-<db>-<ts>.dump" (or "<db>_<ts>.dump").
+func (m *Model) proposeDumpName() {
+	folder := filepath.Base(m.bkFolder)
+	m.bkPrefix = naming.Prefix(folder)
+	ts := time.Now().Format("20060102_150405")
+	m.bkFile = naming.DumpFileName(m.bkPrefix, m.bkDB, ts)
 }
 
 func (m *Model) backupBack() (tea.Model, tea.Cmd) {
@@ -523,10 +551,11 @@ func (m *Model) backupBack() (tea.Model, tea.Cmd) {
 func (m *Model) folderPicker() picker {
 	var items []pickItem
 	for _, f := range m.folders {
-		items = append(items, pickItem{
-			label: f.Name, value: f.Path,
-			hint: fmt.Sprintf("%d backup(s)", len(f.Dumps)),
-		})
+		hint := fmt.Sprintf("%d backup(s)", len(f.Dumps))
+		if p := naming.Prefix(f.Name); p != "" {
+			hint = "prefijo " + p + " · " + hint
+		}
+		items = append(items, pickItem{label: f.Name, value: f.Path, hint: hint})
 	}
 	items = append(items, pickItem{label: "➕ Crear carpeta nueva", value: "__new__"})
 	return picker{title: "carpeta destino", items: items}
@@ -714,6 +743,7 @@ func (m *Model) submitInput(p inputPurpose, val string) (tea.Model, tea.Cmd) {
 			return m, m.fail("No se pudo crear la carpeta", err)
 		}
 		m.bkFolder = path
+		m.proposeDumpName()
 		m.step = 3
 	case inpNewDBName:
 		if val == "" {
@@ -726,6 +756,23 @@ func (m *Model) submitInput(p inputPurpose, val string) (tea.Model, tea.Cmd) {
 			m.rsMode = "CREATE"
 		}
 		m.step = 4
+	case inpDumpName:
+		name := naming.Sanitize(val)
+		if name == "" {
+			return m, nil
+		}
+		if !strings.HasSuffix(name, ".dump") {
+			name += ".dump"
+		}
+		m.bkFile = name
+	case inpFolderPrefix:
+		folder := filepath.Base(m.bkFolder)
+		if err := naming.SetPrefix(folder, val); err != nil {
+			return m, m.fail("No se pudo guardar el prefijo", err)
+		}
+		m.proposeDumpName() // recomputar el nombre con el nuevo prefijo
+		m.setStatus("✓ prefijo guardado para '"+folder+"'", false)
+		return m, statusClearCmd()
 	case inpConfigField:
 		if m.cfgCursor >= 0 && m.cfgCursor < len(m.cfgFields) {
 			m.cfgFields[m.cfgCursor].set(m.cfg, val)
