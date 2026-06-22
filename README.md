@@ -93,43 +93,45 @@ Los binarios Windows llevan sufijo `.exe`; los Unix no.
 
 ## Instalación
 
-### macOS / Linux
+### Rápida — binario prebuilt (no necesitas Go) ⚡
+
+**macOS / Linux:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ander0code/pgflow/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/ander0code/pgflow/main/install.ps1 | iex
+```
+
+Descarga el binario de la [última release](https://github.com/ander0code/pgflow/releases/latest)
+a `~/.local/bin/pgflow` (Windows: `%LOCALAPPDATA%\pgflow\pgflow.exe`). Si ese directorio no está en tu
+`PATH`, añádelo (ver abajo) y luego ejecuta `pgflow`.
+
+```sh
+# macOS / Linux — añade a ~/.zshrc o ~/.bashrc:
+export PATH="$HOME/.local/bin:$PATH"
+```
+```powershell
+# Windows — PATH de usuario:
+[Environment]::SetEnvironmentVariable('Path',"$env:LOCALAPPDATA\pgflow;" + [Environment]::GetEnvironmentVariable('Path','User'),'User')
+```
+
+### Desde el código (necesita Go 1.25+)
 
 ```bash
 git clone https://github.com/ander0code/pgflow.git ~/pgflow
 cd ~/pgflow
-bash install.sh          # compila y copia el binario a ~/.local/bin
+make install            # build + copia a ~/.local/bin   (Windows: .\install.ps1)
 ```
 
-Si `~/.local/bin` no está en tu `PATH`, añade a `~/.zshrc` (o `~/.bashrc`):
+Los instaladores `install.sh` / `install.ps1` también funcionan desde el clon: intentan descargar el
+release y, si falla, compilan del código (requiere Go).
 
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Luego: `pgflow`.
-
-Sin instalar: `go run .` · con make: `make run`.
-
-### Windows
-
-Desde **PowerShell** (en el directorio del repo):
-
-```powershell
-git clone https://github.com/ander0code/pgflow.git C:\tools\pgflow
-cd C:\tools\pgflow
-.\install.ps1           # compila y copia a %LOCALAPPDATA%\pgflow\pgflow.exe
-```
-
-Si `%LOCALAPPDATA%\pgflow` no está en tu `PATH`, agrégalo al PATH del usuario:
-
-```powershell
-[Environment]::SetEnvironmentVariable('Path',"$env:LOCALAPPDATA\pgflow;" + [Environment]::GetEnvironmentVariable('Path','User'),'User')
-```
-
-Luego abre **una nueva ventana de PowerShell** y: `pgflow`.
-
-Para desinstalar: `.\uninstall.ps1`.
+Sin instalar: `go run .` · desinstalar: `bash uninstall.sh` (Windows: `.\uninstall.ps1`).
 
 ## Configuración
 

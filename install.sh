@@ -1,67 +1,88 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# pgflow — installer
-# Builds the Go binary and drops it on your PATH.
+# pgflow — installer (macOS / Linux)
+#
+# Descarga el binario prebuilt desde GitHub Releases (NO necesitas Go).
+# Si lo corres dentro de un clon del repo y falla la descarga, compila del código.
+#
+#   curl -fsSL https://raw.githubusercontent.com/ander0code/pgflow/main/install.sh | bash
+#
+# Variables:
+#   PGFLOW_INSTALL_DIR   destino (default: ~/.local/bin)
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
+REPO="ander0code/pgflow"
+TOOL="pgflow"
 INSTALL_DIR="${PGFLOW_INSTALL_DIR:-$HOME/.local/bin}"
-TOOL_NAME="pgflow"
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo ""
-echo "🐘  Installing pgflow..."
-echo ""
+say() { printf '%s\n' "$*"; }
 
-# ── Go check ──────────────────────────────────────────────────────────────────
-if ! command -v go &>/dev/null; then
-  echo "❌  Go is not installed."
-  echo "    Install it: https://go.dev/dl/"
-  echo "    macOS:      brew install go"
-  exit 1
+# ── detectar plataforma ─────────────────────────────────────────────────────────
+os="$(uname -s)"; arch="$(uname -m)"
+case "$os" in
+  Darwin) os="darwin" ;;
+  Linux)  os="linux" ;;
+  *) say "❌  SO no soportado por este script: $os"
+     say "    (¿Windows? usa install.ps1 desde PowerShell)"; exit 1 ;;
+esac
+case "$arch" in
+  x86_64|amd64)  arch="amd64" ;;
+  arm64|aarch64) arch="arm64" ;;
+  *) say "❌  arquitectura no soportada: $arch"; exit 1 ;;
+esac
+
+asset="${TOOL}-${os}-${arch}"
+url="https://github.com/${REPO}/releases/latest/download/${asset}"
+
+say ""
+say "🐘  Instalando pgflow (${os}/${arch})..."
+
+mkdir -p "$INSTALL_DIR"
+tmp="$(mktemp)"
+
+if curl -fsSL "$url" -o "$tmp"; then
+  install -m 0755 "$tmp" "$INSTALL_DIR/$TOOL"
+  rm -f "$tmp"
+  say "✅  Descargado e instalado → $INSTALL_DIR/$TOOL"
+else
+  rm -f "$tmp"
+  say "⚠️   No se pudo descargar ($url)."
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+  if [ -n "$script_dir" ] && [ -f "${script_dir}/go.mod" ] && command -v go >/dev/null 2>&1; then
+    say "🔨  Compilando desde el código (go build)..."
+    (cd "$script_dir" && go build -ldflags="-s -w" -o "$INSTALL_DIR/$TOOL" .)
+    say "✅  Compilado e instalado → $INSTALL_DIR/$TOOL"
+  else
+    say "    Revisa que exista un release: https://github.com/${REPO}/releases"
+    say "    o clona el repo y corre 'make install' (necesita Go)."
+    exit 1
+  fi
 fi
-echo "✅  Go found: $(go version | awk '{print $3}')"
 
-# ── Runtime deps (warn only) ────────────────────────────────────────────────────
+# ── deps de runtime (solo aviso) ────────────────────────────────────────────────
 missing=()
 for dep in psql pg_dump pg_restore ssh; do
-  command -v "$dep" &>/dev/null || missing+=("$dep")
+  command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
 done
 if [ ${#missing[@]} -gt 0 ]; then
-  echo "⚠️   Missing runtime tools: ${missing[*]}"
-  echo "    macOS:  brew install postgresql"
-  echo "    Debian: sudo apt install postgresql-client openssh-client"
+  say ""
+  say "⚠️   Faltan herramientas en runtime: ${missing[*]}"
+  say "    macOS:  brew install postgresql"
+  say "    Debian: sudo apt install postgresql-client openssh-client"
 fi
 
-# ── Build ─────────────────────────────────────────────────────────────────────
-echo "🔨  Building binary..."
-(cd "$REPO_DIR" && go build -ldflags="-s -w" -o "$REPO_DIR/$TOOL_NAME" .)
-echo "✅  Built → $REPO_DIR/$TOOL_NAME"
+# ── PATH ────────────────────────────────────────────────────────────────────────
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*) : ;;
+  *)
+    rc="$HOME/.$(basename "${SHELL:-bash}")rc"
+    say ""
+    say "⚠️   $INSTALL_DIR no está en tu PATH. Añade a $rc:"
+    say '       export PATH="$HOME/.local/bin:$PATH"'
+    say "    y luego:  source $rc"
+    ;;
+esac
 
-# ── Install ───────────────────────────────────────────────────────────────────
-mkdir -p "$INSTALL_DIR"
-cp "$REPO_DIR/$TOOL_NAME" "$INSTALL_DIR/$TOOL_NAME"
-chmod +x "$INSTALL_DIR/$TOOL_NAME"
-echo "✅  Installed → $INSTALL_DIR/$TOOL_NAME"
-
-# ── PATH hint ─────────────────────────────────────────────────────────────────
-if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-  SHELL_NAME=$(basename "${SHELL:-bash}")
-  RC="$HOME/.${SHELL_NAME}rc"
-  echo ""
-  echo "⚠️   $INSTALL_DIR is not in your PATH."
-  echo "    Add this line to $RC:"
-  echo ""
-  echo '    export PATH="$HOME/.local/bin:$PATH"'
-  echo ""
-  echo "    Then run:  source $RC"
-fi
-
-echo ""
-echo "🚀  Done! Run it:"
-echo ""
-echo "    pgflow"
-echo "    pgflow --list"
-echo "    pgflow --list --json"
-echo ""
-echo "    (¿Windows? usa install.ps1 desde PowerShell)"
+say ""
+say "🚀  Listo. Ejecuta:  pgflow      (ayuda: pgflow --help)"
