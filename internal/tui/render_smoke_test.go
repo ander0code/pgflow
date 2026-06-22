@@ -85,6 +85,8 @@ func TestViewAcrossStates(t *testing.T) {
 	mustRender(t, m, "backup-confirm")
 	m.startInput(inpDumpName, "nombre", m.bkFile)
 	mustRender(t, m, "backup-edit-name")
+	m.startInput(inpTemplate, "plantilla", "{db}_{datetime}")
+	mustRender(t, m, "backup-edit-template")
 
 	// restore wizard
 	r := newSized()
@@ -162,9 +164,18 @@ func TestSnapshot(t *testing.T) {
 	b.bkDB = "shopdb"
 	b.bkFolder = "/srv/backups/tienda-web"
 	b.bkPrefix = "TIENDA_PROD"
-	b.bkFile = "TIENDA_PROD-shopdb-20260622_104207.dump"
+	b.bkTemplate = "{prefix}-{db}-{datetime}-{seq}"
+	b.bkFile = "TIENDA_PROD-shopdb-20260622_104207-001.dump"
 	b.cfg.Prod.User, b.cfg.Prod.Host, b.cfg.Prod.Port, b.cfg.ProdSSH = "produser", "localhost", "5433", "mi-servidor"
 	snap("BACKUP · confirm", b)
+
+	te := newSized()
+	te.scr, te.step = screenBackup, 3
+	te.bkDB = "shopdb"
+	te.bkFolder = "/srv/backups/tienda-web"
+	te.bkTemplate = "{prefix}-{db}-{datetime}-{seq}"
+	te.startInput(inpTemplate, "plantilla", te.bkTemplate)
+	snap("BACKUP · editor de plantilla", te)
 
 	r := newSized()
 	r.folders = sampleFolders()

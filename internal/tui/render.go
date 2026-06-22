@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ander0code/pgflow/internal/backups"
+	"github.com/ander0code/pgflow/internal/naming"
 )
 
 type keyHint struct{ key, desc string }
@@ -19,6 +20,13 @@ var (
 	}
 	flowKeys   = []keyHint{{"↑/↓", "elegir"}, {"enter", "ok"}, {"←", "atrás"}, {"esc", "cancelar"}}
 	configKeys = []keyHint{{"↑/↓", "campo"}, {"enter", "editar"}, {"l", "probar local"}, {"p", "probar prod"}, {"esc", "volver"}}
+
+	// footer contextual del paso "Confirmar"
+	backupConfirmKeys = []keyHint{
+		{"e", "nombre"}, {"t", "plantilla"}, {"p", "prefijo"},
+		{"enter", "ejecutar"}, {"←", "atrás"}, {"esc", "cancelar"},
+	}
+	restoreConfirmKeys = []keyHint{{"enter", "restaurar"}, {"←", "atrás"}, {"esc", "cancelar"}}
 )
 
 func (m *Model) View() string {
@@ -60,6 +68,19 @@ func (m *Model) modalWidth() int {
 	}
 	if w < 54 {
 		w = 54
+	}
+	return w
+}
+
+// confirmWidth is a bit wider than modalWidth so the backup summary (template,
+// long file names, origin) breathes and uses the available space.
+func (m *Model) confirmWidth() int {
+	w := m.width - 8
+	if w > 92 {
+		w = 92
+	}
+	if w < 60 {
+		w = 60
 	}
 	return w
 }
@@ -458,7 +479,15 @@ func (m *Model) isConfirmStep() bool {
 
 func (m *Model) renderFlow() string {
 	header := m.renderFlowHeader()
-	footer := m.renderFooter(flowKeys)
+	footerKeys := flowKeys
+	if m.isConfirmStep() {
+		if m.scr == screenBackup {
+			footerKeys = backupConfirmKeys
+		} else {
+			footerKeys = restoreConfirmKeys
+		}
+	}
+	footer := m.renderFooter(footerKeys)
 	sb := m.renderStatusBar()
 	sbH := 0
 	if sb != "" {
@@ -622,8 +651,10 @@ func (m *Model) renderInputPanel() string {
 		title, hint = "✎  Nombre del archivo", "Se guarda en la carpeta destino · Enter ok · Esc cancela"
 	case inpFolderPrefix:
 		title, hint = "🏷  Prefijo de la carpeta", "Se aplica a los dumps de esta carpeta · vacío = sin prefijo"
+	case inpTemplate:
+		title, hint = "🧩  Plantilla del nombre", "tokens: "+naming.Tokens+" · vacío = por defecto"
 	}
-	w := m.modalWidth()
+	w := m.confirmWidth()
 	content := strings.Join([]string{
 		"",
 		modalTitleStyle.Render(title),
@@ -640,7 +671,7 @@ func (m *Model) renderInputPanel() string {
 }
 
 func (m *Model) renderConfirm() string {
-	w := m.modalWidth()
+	w := m.confirmWidth()
 	valW := w - 17
 	if valW < 12 {
 		valW = 12
@@ -652,7 +683,7 @@ func (m *Model) renderConfirm() string {
 		} else {
 			v = truncate(value, valW)
 		}
-		return "  " + modalLabelStyle.Render(padR(label, 8)) + " " + modalValueStyle.Render(v)
+		return "  " + modalLabelStyle.Render(padR(label, 9)) + " " + modalValueStyle.Render(v)
 	}
 
 	if m.scr == screenBackup {
@@ -663,14 +694,15 @@ func (m *Model) renderConfirm() string {
 			folderLabel += "  (prefijo: " + m.bkPrefix + ")"
 		}
 		rows := []string{
-			modalTitleStyle.Render("Resumen del backup"),
+			modalTitleStyle.Render("💾  Resumen del backup"),
 			"",
 			field("base", m.bkDB, false),
 			field("origen", origin, false),
 			field("carpeta", folderLabel, false),
+			field("plantilla", m.bkTemplate, true),
 			field("archivo", m.bkFile, true),
 			"",
-			modalHintStyle.Render(truncate("  e editar nombre · p prefijo de la carpeta", w-6)),
+			modalHintStyle.Render(truncate("  tokens: "+naming.Tokens, w-6)),
 			modalHintStyle.Render(truncate("  ⓘ el rol debe poder leer toda la base (GRANT pg_read_all_data).", w-6)),
 			"",
 			confirmButtons("Sí, ejecutar el backup", false),

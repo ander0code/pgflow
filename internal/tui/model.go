@@ -43,6 +43,7 @@ const (
 	inpConfigField
 	inpDumpName
 	inpFolderPrefix
+	inpTemplate
 )
 
 var tsSuffix = regexp.MustCompile(`_\d{8}_\d{6}$`)
@@ -146,10 +147,12 @@ type Model struct {
 	awaitLocalPicker bool
 
 	// backup flow
-	bkDB     string
-	bkFolder string
-	bkFile   string // nombre propuesto del dump (editable en el confirm)
-	bkPrefix string // prefijo de la carpeta destino (para mostrar)
+	bkDB       string
+	bkFolder   string
+	bkFile     string // nombre propuesto del dump (editable en el confirm)
+	bkPrefix   string // prefijo de la carpeta destino (para mostrar)
+	bkTemplate string // plantilla efectiva del nombre (por db)
+	bkUsesSeq  bool   // si la plantilla usa {seq} → autoincrementar al terminar
 
 	// restore flow
 	rsFolder      string
@@ -301,6 +304,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				extra = fmt.Sprintf(" · %d aviso(s)", msg.dumpRes.Warnings)
 			}
 			m.selectPath = msg.dumpRes.File // quedará seleccionado tras el scan
+			if m.bkUsesSeq {
+				_ = naming.BumpSeq(m.bkDB) // autoincrementar el contador de esta db
+			}
 			m.setStatus(fmt.Sprintf("✓ backup listo en %s — %s%s",
 				msg.dumpRes.Elapsed.Round(time.Second), filepath.Base(msg.dumpRes.File), extra), false)
 		case "restore":
@@ -500,6 +506,10 @@ func (m *Model) handleBackupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.startInput(inpFolderPrefix, "prefijo de la carpeta", cur)
 		}
+	case "t":
+		if m.step == 3 {
+			m.startInput(inpTemplate, "plantilla del nombre", m.bkTemplate)
+		}
 	case "enter":
 		return m.backupSelect()
 	}
@@ -532,8 +542,13 @@ func (m *Model) backupSelect() (tea.Model, tea.Cmd) {
 func (m *Model) proposeDumpName() {
 	folder := filepath.Base(m.bkFolder)
 	m.bkPrefix = naming.Prefix(folder)
-	ts := time.Now().Format("20060102_150405")
-	m.bkFile = naming.DumpFileName(m.bkPrefix, m.bkDB, ts)
+	m.bkTemplate = naming.Template(m.bkDB)
+	if m.bkTemplate == "" {
+		m.bkTemplate = naming.DefaultTemplate(m.bkPrefix)
+	}
+	m.bkUsesSeq = strings.Contains(m.bkTemplate, "{seq}")
+	seq := naming.Seq(m.bkDB) + 1
+	m.bkFile = naming.Render(m.bkTemplate, m.bkDB, m.bkPrefix, time.Now(), seq)
 }
 
 func (m *Model) backupBack() (tea.Model, tea.Cmd) {
@@ -772,6 +787,13 @@ func (m *Model) submitInput(p inputPurpose, val string) (tea.Model, tea.Cmd) {
 		}
 		m.proposeDumpName() // recomputar el nombre con el nuevo prefijo
 		m.setStatus("✓ prefijo guardado para '"+folder+"'", false)
+		return m, statusClearCmd()
+	case inpTemplate:
+		if err := naming.SetTemplate(m.bkDB, val); err != nil {
+			return m, m.fail("No se pudo guardar la plantilla", err)
+		}
+		m.proposeDumpName() // recomputar el nombre con la nueva plantilla
+		m.setStatus("✓ plantilla guardada para '"+m.bkDB+"'", false)
 		return m, statusClearCmd()
 	case inpConfigField:
 		if m.cfgCursor >= 0 && m.cfgCursor < len(m.cfgFields) {
