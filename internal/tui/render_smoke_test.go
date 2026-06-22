@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"regexp"
 	"testing"
 	"time"
@@ -27,6 +28,23 @@ func sampleFolders() []backups.Folder {
 		}},
 		{Name: "blog", Path: "/b/blog"},
 	}
+}
+
+// manyDumpFolder simula una carpeta con muchos dumps de nombre largo (el caso
+// que se veía mal: wrap + overflow). Nombres genéricos, no de clientes reales.
+func manyDumpFolder() []backups.Folder {
+	now := time.Now()
+	var dumps []backups.Dump
+	for i := 0; i < 20; i++ {
+		dumps = append(dumps, backups.Dump{
+			Name:      fmt.Sprintf("shop_PRODUCCION-2026_06_%02d_12_06_15-tienda.dump", i+1),
+			Path:      fmt.Sprintf("/b/tienda-web/d%02d.dump", i),
+			SizeBytes: int64(1_700_000 - i*60_000),
+			ModTime:   now.Add(-time.Duration(i) * time.Hour),
+			Valid:     i != 4,
+		})
+	}
+	return []backups.Folder{{Name: "tienda-web", Path: "/b/tienda-web", Dumps: dumps}}
 }
 
 func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
@@ -167,6 +185,13 @@ func TestSnapshot(t *testing.T) {
 	hp := newSized()
 	hp.modal = modalHelp
 	snap("HELP · ? ayuda", hp)
+
+	pk := newSized()
+	pk.folders = manyDumpFolder()
+	pk.scr, pk.step = screenRestore, 2
+	pk.pick = pk.dumpPicker("/b/tienda-web")
+	pk.pick.cursor = 8
+	snap("PICKER · 20 dumps (scroll, full-width, sin wrap)", pk)
 }
 
 func TestSuggestLocalName(t *testing.T) {

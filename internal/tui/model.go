@@ -98,11 +98,12 @@ type Model struct {
 	modal modal
 
 	// dashboard
-	folders   []backups.Folder
-	visible   []dashItem
-	cursor    int
-	collapsed map[string]bool
-	lastScan  time.Time
+	folders    []backups.Folder
+	visible    []dashItem
+	cursor     int
+	collapsed  map[string]bool
+	lastScan   time.Time
+	selectPath string // dump a seleccionar tras el próximo scan (p.ej. el backup recién creado)
 
 	// health
 	localOK     bool
@@ -220,6 +221,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.folders = msg.folders
 		m.lastScan = time.Now()
 		m.rebuildVisible()
+		if m.selectPath != "" {
+			m.selectDumpByPath(m.selectPath)
+			m.selectPath = ""
+		}
 		return m, nil
 
 	case statusDoneMsg:
@@ -290,6 +295,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.dumpRes.Warnings > 0 {
 				extra = fmt.Sprintf(" · %d aviso(s)", msg.dumpRes.Warnings)
 			}
+			m.selectPath = msg.dumpRes.File // quedará seleccionado tras el scan
 			m.setStatus(fmt.Sprintf("✓ backup listo en %s — %s%s",
 				msg.dumpRes.Elapsed.Round(time.Second), filepath.Base(msg.dumpRes.File), extra), false)
 		case "restore":
@@ -872,6 +878,26 @@ func (m *Model) localDBContains(name string) bool {
 		}
 	}
 	return false
+}
+
+// selectDumpByPath mueve el cursor al dump con esa ruta (expandiendo su carpeta
+// si está contraída). Se usa para resaltar el backup recién creado.
+func (m *Model) selectDumpByPath(path string) {
+	for _, f := range m.folders {
+		for _, d := range f.Dumps {
+			if d.Path == path {
+				delete(m.collapsed, f.Name) // asegurar expandida
+				m.rebuildVisible()
+				for i, it := range m.visible {
+					if !it.isHeader && it.dump.Path == path {
+						m.cursor = i
+						return
+					}
+				}
+				return
+			}
+		}
+	}
 }
 
 func (m *Model) rebuildVisible() {

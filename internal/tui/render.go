@@ -162,15 +162,16 @@ func (m *Model) connSummary() string {
 }
 
 func (m *Model) renderBackupList(width, height int) string {
-	title := lipgloss.JoinHorizontal(lipgloss.Bottom,
-		panelTitleStyle.Render(fmt.Sprintf(" Backups (%d) ", backups.Total(m.folders))),
-		panelSubtitleStyle.Render("· por proyecto"))
-
 	contentW := width - 4
 	if contentW < 16 {
 		contentW = 16
 	}
+	contentH := height - 2
+	if contentH < 1 {
+		contentH = 1
+	}
 
+	hint := "· por proyecto"
 	var rows []string
 	if len(m.visible) == 0 {
 		if m.lastScan.IsZero() {
@@ -183,11 +184,18 @@ func (m *Model) renderBackupList(width, height int) string {
 				" "+footerKeyStyle.Render("b")+footerDescStyle.Render(" hace tu primer backup de producción"))
 		}
 	} else {
-		for i, it := range m.visible {
-			rows = append(rows, m.renderDashRow(it, i == m.cursor, contentW))
+		start, end := windowBounds(m.cursor, len(m.visible), contentH)
+		for i := start; i < end; i++ {
+			rows = append(rows, m.renderDashRow(m.visible[i], i == m.cursor, contentW))
+		}
+		if sh := scrollHint(m.cursor, len(m.visible), start, end); sh != "" {
+			hint = "· por proyecto · " + sh
 		}
 	}
 
+	title := lipgloss.JoinHorizontal(lipgloss.Bottom,
+		panelTitleStyle.Render(fmt.Sprintf(" Backups (%d) ", backups.Total(m.folders))),
+		panelSubtitleStyle.Render(hint))
 	// Active (focused) panel: purple border tells the user "navega aquí".
 	box := panelStyleActive.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
 	return lipgloss.JoinVertical(lipgloss.Left, title, box)
@@ -465,15 +473,14 @@ func (m *Model) renderFlow() string {
 	var body string
 	switch {
 	case m.input.Focused():
-		body = m.renderInputPanel()
+		body = lipgloss.Place(m.width, avail, lipgloss.Center, lipgloss.Center, m.renderInputPanel())
 	case m.isConfirmStep():
-		body = m.renderConfirm()
+		body = lipgloss.Place(m.width, avail, lipgloss.Center, lipgloss.Center, m.renderConfirm())
 	default:
-		body = m.renderPicker()
+		body = m.renderPickerPanel(m.width, avail) // lista a pantalla completa, con scroll
 	}
-	bodyBlock := lipgloss.Place(m.width, avail, lipgloss.Center, lipgloss.Center, body)
 
-	parts := []string{header, bodyBlock}
+	parts := []string{header, body}
 	if sb != "" {
 		parts = append(parts, sb)
 	}
@@ -526,46 +533,75 @@ func (m *Model) crumb() string {
 	return b.String()
 }
 
-func (m *Model) renderPicker() string {
-	w := m.modalWidth()
-	rows := []string{panelTitleStyle.Render(" " + m.pick.title + " "), ""}
-	if len(m.pick.items) == 0 {
+// renderPickerPanel renders the wizard list full-screen, with scroll, so long
+// listas (muchos dumps) ya no se parten ni desbordan la pantalla.
+func (m *Model) renderPickerPanel(width, height int) string {
+	total := len(m.pick.items)
+	contentW := width - 4
+	if contentW < 20 {
+		contentW = 20
+	}
+	contentH := height - 2
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	hint := ""
+	var rows []string
+	if total == 0 {
 		rows = append(rows, helpStyle.Render("  (vacío)"))
+	} else {
+		start, end := windowBounds(m.pick.cursor, total, contentH)
+		for i := start; i < end; i++ {
+			rows = append(rows, m.renderPickRow(m.pick.items[i], i == m.pick.cursor, contentW))
+		}
+		hint = "· " + scrollHint(m.pick.cursor, total, start, end)
 	}
-	for i, it := range m.pick.items {
-		rows = append(rows, m.renderPickRow(it, i == m.pick.cursor, w-8))
-	}
-	return modalBoxStyle.Width(w).Render(strings.Join(rows, "\n"))
+
+	title := lipgloss.JoinHorizontal(lipgloss.Bottom,
+		panelTitleStyle.Render(" "+m.pick.title+" "),
+		panelSubtitleStyle.Render(hint))
+	box := panelStyleActive.Width(width - 2).Height(height - 2).Render(strings.Join(rows, "\n"))
+	return lipgloss.JoinVertical(lipgloss.Left, title, box)
 }
 
+// renderPickRow renders one option on a single line: " ✓ label … hint" con el
+// hint alineado a la derecha y el label truncado para que quepa (nunca wrap).
 func (m *Model) renderPickRow(it pickItem, selected bool, w int) string {
+	gl := " "
+	switch it.mark {
+	case 1:
+		gl = "✓"
+	case -1:
+		gl = "✗"
+	}
+	label := it.label
+	maxLabel := w - 3 - lipgloss.Width(it.hint) - 2
+	if maxLabel < 6 {
+		maxLabel = 6
+	}
+	if lipgloss.Width(label) > maxLabel {
+		label = truncate(label, maxLabel)
+	}
+	gap := w - 3 - lipgloss.Width(label) - lipgloss.Width(it.hint)
+	if gap < 1 {
+		gap = 1
+	}
+
 	if selected {
-		mark := " "
-		switch it.mark {
-		case 1:
-			mark = "✓"
-		case -1:
-			mark = "✗"
-		}
-		line := fmt.Sprintf(" %s %s", mark, it.label)
-		if it.hint != "" {
-			line += "  " + it.hint
-		}
+		line := " " + gl + " " + label + strings.Repeat(" ", gap) + it.hint
 		return rowSelectedStyle.Render(padLine(line, w))
 	}
 
-	glyph := " "
+	glyph := gl
 	switch it.mark {
 	case 1:
 		glyph = okStyle.Render("✓")
 	case -1:
 		glyph = errStyle.Render("✗")
 	}
-	out := " " + glyph + " " + rowNormalStyle.Render(it.label)
-	if it.hint != "" {
-		out += "  " + helpStyle.Render(it.hint)
-	}
-	return out
+	return " " + glyph + " " + rowNormalStyle.Render(label) +
+		strings.Repeat(" ", gap) + helpStyle.Render(it.hint)
 }
 
 func (m *Model) renderInputPanel() string {
@@ -936,6 +972,37 @@ func truncateLeft(s string, n int) string {
 		return "…"
 	}
 	return "…" + string(r[len(r)-(n-1):])
+}
+
+// windowBounds returns the [start,end) slice of `total` items to render in `n`
+// rows, keeping `cursor` visible (centered once the list scrolls).
+func windowBounds(cursor, total, n int) (int, int) {
+	if n <= 0 || total <= n {
+		return 0, total
+	}
+	start := cursor - n/2
+	if start < 0 {
+		start = 0
+	}
+	if start > total-n {
+		start = total - n
+	}
+	return start, start + n
+}
+
+// scrollHint shows "pos/total" with ↑/↓ when there are items off-screen.
+func scrollHint(cursor, total, start, end int) string {
+	if total == 0 {
+		return ""
+	}
+	s := fmt.Sprintf("%d/%d", cursor+1, total)
+	if start > 0 {
+		s = "↑ " + s
+	}
+	if end < total {
+		s += " ↓"
+	}
+	return s
 }
 
 func padLine(s string, target int) string {
